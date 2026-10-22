@@ -7,7 +7,6 @@ on:
 
 env:
   DOCKER_IMAGE: ghcr.io/highl0ad/mafia_game
-  DEPLOY_PATH: /home/abil/projects/Mafia_Game
 
 jobs:
   test:
@@ -65,44 +64,31 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Deploy to Dokploy
+        env:
+          DOKPLOY_URL: https://dokploy.homeabil.online
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          COMPOSE_ID: gCP9h6RZdWtsvREC-W9jv
+        run: |
+          set -euo pipefail
+          api() { curl -fsS --retry 3 --retry-delay 2 -H "x-api-key: $DOKPLOY_API_KEY" -H "content-type: application/json" "$@"; }
+          deployments() { api "$DOKPLOY_URL/api/compose.one?composeId=$COMPOSE_ID"; }
+          before=$(deployments | jq -r '[.deployments[].createdAt] | max // ""')
+          api -X POST "$DOKPLOY_URL/api/compose.deploy" \
+            -d "$(jq -n --arg id "$COMPOSE_ID" --arg t "${GITHUB_SHA::7}" '{composeId: $id, title: $t}')" >/dev/null
+          for _ in $(seq 1 60); do
+            sleep 5
+            st=$(deployments | jq -r --arg b "$before" '[.deployments[] | select(.createdAt > $b)] | sort_by(.createdAt) | last | .status // "queued"')
+            echo "Dokploy deployment status: $st"
+            case "$st" in
+              done) exit 0 ;;
+              error) echo "Dokploy deployment failed" >&2; exit 1 ;;
+            esac
+          done
+          echo "Timed out waiting for Dokploy deployment" >&2
+          exit 1
 
-      - name: Copy files to VPS
-        uses: appleboy/scp-action@v1
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
-          source: "compose.yml"
-          target: ${{ env.DEPLOY_PATH }}
-          overwrite: true
-
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
-          script: |
-            set -eu
-            cd ${{ env.DEPLOY_PATH }}
-
-            # Pull latest GHCR image with retries
-            for attempt in 1 2 3; do
-              if docker compose pull web; then
-                break
-              fi
-
-              if [ "$attempt" -eq 3 ]; then
-                echo "Failed to pull the web image after 3 attempts" >&2
-                exit 1
-              fi
-
-              sleep $((attempt * 5))
-            done
-
-            docker compose up -d --remove-orphans
-            docker image prune -f
+      - name: Health check
+        run: |
+          curl --fail --silent --show-error --location --retry 10 --retry-all-errors --retry-delay 5 \
+            https://mafia.abil.space/ >/dev/null
