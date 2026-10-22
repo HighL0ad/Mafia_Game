@@ -4,6 +4,7 @@ on:
   push:
     branches: ["master", "main"]
   pull_request:
+  workflow_dispatch:
 
 env:
   DOCKER_IMAGE: ghcr.io/highl0ad/mafia_game
